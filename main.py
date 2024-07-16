@@ -11,6 +11,8 @@ import torch.nn as nn
 import torchvision
 from torchvision import transforms
 
+import csv
+
 
 def set_seed(seed):
     random.seed(seed)
@@ -92,7 +94,15 @@ class VQADataset(torch.utils.data.Dataset):
                     word = process_text(word)
                     if word not in self.answer2idx:
                         self.answer2idx[word] = len(self.answer2idx)
-            self.idx2answer = {v: k for k, v in self.answer2idx.items()}  # 逆変換用の辞書(answer)
+        
+        with open('class_mapping.csv', newline='' ,encoding="utf-8") as f:
+            reader = csv.reader(f)
+            for a, i in reader:
+                if a in self.idx2answer:
+                    self.answer2idx[a] = len(self.answer2idx)
+            
+        self.idx2answer = {v: k for k, v in self.answer2idx.items()}  # 逆変換用の辞書(answer)
+        
 
     def update_dict(self, dataset):
         """
@@ -290,8 +300,12 @@ def ResNet50():
 class VQAModel(nn.Module):
     def __init__(self, vocab_size: int, n_answer: int):
         super().__init__()
-        self.resnet = ResNet18()
-        self.text_encoder = nn.Linear(vocab_size, 512)
+        self.resnet = ResNet50()
+        self.text_encoder = nn.Sequential(
+            nn.Linear(vocab_size, 1024),
+            nn.ReLU(inplace=True),
+            nn.Linear(1024, 512)
+        )
 
         self.fc = nn.Sequential(
             nn.Linear(1024, 512),
@@ -319,6 +333,10 @@ def train(model, dataloader, optimizer, criterion, device):
 
     start = time.time()
     for image, question, answers, mode_answer in dataloader:
+
+        # ### Add by Fukuda
+        # question = process_text(question)
+
         image, question, answer, mode_answer = \
             image.to(device), question.to(device), answers.to(device), mode_answer.to(device)
 
@@ -363,6 +381,12 @@ def main():
     set_seed(42)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    if torch.cuda.is_available():
+        print("Find GPU!")
+    else:
+        print("Use CPU only")
+    
+
     # dataloader / model
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
@@ -372,15 +396,15 @@ def main():
     test_dataset = VQADataset(df_path="./data/valid.json", image_dir="./data/valid", transform=transform, answer=False)
     test_dataset.update_dict(train_dataset)
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=128, shuffle=True)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
 
     model = VQAModel(vocab_size=len(train_dataset.question2idx)+1, n_answer=len(train_dataset.answer2idx)).to(device)
 
     # optimizer / criterion
-    num_epoch = 20
+    num_epoch = 50
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
 
     # train model
     for epoch in range(num_epoch):
@@ -390,20 +414,34 @@ def main():
               f"train loss: {train_loss:.4f}\n"
               f"train acc: {train_acc:.4f}\n"
               f"train simple acc: {train_simple_acc:.4f}")
+        
+        # 提出用ファイルの作成
+        model.eval()
+        submission = []
+        for image, question in test_loader:
+            image, question = image.to(device), question.to(device)
+            pred = model(image, question)
+            pred = pred.argmax(1).cpu().item()
+            submission.append(pred)
 
-    # 提出用ファイルの作成
-    model.eval()
-    submission = []
-    for image, question in test_loader:
-        image, question = image.to(device), question.to(device)
-        pred = model(image, question)
-        pred = pred.argmax(1).cpu().item()
-        submission.append(pred)
+        submission = [train_dataset.idx2answer[id] for id in submission]
+        submission = np.array(submission)
+        torch.save(model.state_dict(), "model.pth")
+        np.save("submission.npy", submission)
 
-    submission = [train_dataset.idx2answer[id] for id in submission]
-    submission = np.array(submission)
-    torch.save(model.state_dict(), "model.pth")
-    np.save("submission.npy", submission)
+    # # 提出用ファイルの作成
+    # model.eval()
+    # submission = []
+    # for image, question in test_loader:
+    #     image, question = image.to(device), question.to(device)
+    #     pred = model(image, question)
+    #     pred = pred.argmax(1).cpu().item()
+    #     submission.append(pred)
+
+    # submission = [train_dataset.idx2answer[id] for id in submission]
+    # submission = np.array(submission)
+    # torch.save(model.state_dict(), "model.pth")
+    # np.save("submission.npy", submission)
 
 if __name__ == "__main__":
     main()
