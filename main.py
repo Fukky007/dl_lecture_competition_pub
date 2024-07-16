@@ -12,6 +12,8 @@ import torchvision
 from torchvision import transforms
 
 import csv
+from transformers import BertTokenizer, BertForTokenClassification
+from transformers import AutoTokenizer, AutoModelForMaskedLM
 
 
 def set_seed(seed):
@@ -148,14 +150,29 @@ class VQADataset(torch.utils.data.Dataset):
             except KeyError:
                 question[-1] = 1  # 未知語
 
-        if self.answer:
-            answers = [self.answer2idx[process_text(answer["answer"])] for answer in self.df["answers"][idx]]
-            mode_answer_idx = mode(answers)  # 最頻値を取得（正解ラベル）
+        # tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+        # model = BertForTokenClassification.from_pretrained("bert-base-uncased")
 
-            return image, torch.Tensor(question), torch.Tensor(answers), int(mode_answer_idx)
+        tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-large-uncased")
+        model = AutoModelForMaskedLM.from_pretrained("google-bert/bert-large-uncased")
+
+        inputs = tokenizer(question_words, add_special_tokens=False, return_tensors="pt", padding=True, truncation=True)
+        
+        with torch.no_grad():
+            question = model(**inputs).logits
+
+        if self.answer:
+            inputs = tokenizer(question_words, add_special_tokens=False, return_tensors="pt", padding=True, truncation=True)
+        
+            with torch.no_grad():
+                answers = model(**inputs).logits
+            
+            mode_answer_idx = answers.argmax(-1)
+
+            return image, question, answers, mode_answer_idx
 
         else:
-            return image, torch.Tensor(question)
+            return image, question
 
     def __len__(self):
         return len(self.df)
