@@ -10,10 +10,9 @@ import torch
 import torch.nn as nn
 import torchvision
 from torchvision import transforms
+import torch.optim.lr_scheduler as lr_scheduler
 
 import csv
-from transformers import BertTokenizer, BertForTokenClassification
-from transformers import AutoTokenizer, AutoModelForMaskedLM
 
 
 def set_seed(seed):
@@ -150,29 +149,14 @@ class VQADataset(torch.utils.data.Dataset):
             except KeyError:
                 question[-1] = 1  # 未知語
 
-        # tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-        # model = BertForTokenClassification.from_pretrained("bert-base-uncased")
-
-        tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-large-uncased")
-        model = AutoModelForMaskedLM.from_pretrained("google-bert/bert-large-uncased")
-
-        inputs = tokenizer(question_words, add_special_tokens=False, return_tensors="pt", padding=True, truncation=True)
-        
-        with torch.no_grad():
-            question = model(**inputs).logits
-
         if self.answer:
-            inputs = tokenizer(question_words, add_special_tokens=False, return_tensors="pt", padding=True, truncation=True)
-        
-            with torch.no_grad():
-                answers = model(**inputs).logits
-            
-            mode_answer_idx = answers.argmax(-1)
+            answers = [self.answer2idx[process_text(answer["answer"])] for answer in self.df["answers"][idx]]
+            mode_answer_idx = mode(answers)  # 最頻値を取得（正解ラベル）
 
-            return image, question, answers, mode_answer_idx
+            return image, torch.Tensor(question), torch.Tensor(answers), int(mode_answer_idx)
 
         else:
-            return image, question
+            return image, torch.Tensor(question)
 
     def __len__(self):
         return len(self.df)
@@ -406,8 +390,11 @@ def main():
 
     # dataloader / model
     transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor()
+        transforms.RandomResizedCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
     train_dataset = VQADataset(df_path="./data/train.json", image_dir="./data/train", transform=transform)
     test_dataset = VQADataset(df_path="./data/valid.json", image_dir="./data/valid", transform=transform, answer=False)
@@ -422,6 +409,8 @@ def main():
     num_epoch = 50
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
+
+    scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.7)
 
     # train model
     for epoch in range(num_epoch):
@@ -440,6 +429,9 @@ def main():
             pred = model(image, question)
             pred = pred.argmax(1).cpu().item()
             submission.append(pred)
+        
+        # スケジューラーの更新
+        scheduler.step()
 
         submission = [train_dataset.idx2answer[id] for id in submission]
         submission = np.array(submission)
