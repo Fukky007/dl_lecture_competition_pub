@@ -299,18 +299,20 @@ def ResNet50():
 
 
 class VQAModel(nn.Module):
-    def __init__(self, vocab_size: int, n_answer: int):
+    def __init__(self, vocab_size: int, n_answer: int, dropout_prob=0.5):
         super().__init__()
         self.resnet = ResNet50()
         self.text_encoder = nn.Sequential(
             nn.Linear(vocab_size, 1024),
             nn.ReLU(inplace=True),
+            nn.Dropout(dropout_prob),  # Dropoutを追加
             nn.Linear(1024, 512)
         )
 
         self.fc = nn.Sequential(
             nn.Linear(1024, 512),
             nn.ReLU(inplace=True),
+            nn.Dropout(dropout_prob),  # Dropoutを追加
             nn.Linear(512, n_answer)
         )
 
